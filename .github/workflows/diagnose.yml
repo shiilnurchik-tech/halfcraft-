@@ -1,0 +1,23 @@
+name: Inspect failed Gradle invocation
+on:
+  push:
+    branches: [arena/61fd8987-halfcraft]
+    paths: [.github/workflows/diagnose.yml]
+permissions:
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --allow-escape-sequences repos/${{ github.repository }}/actions/jobs/122716365635/logs > failed.log
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('failed.log').read_text(errors='replace')
+          text=re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
+          start=text.find('* What went wrong:')
+          print('::warning title=Gradle cause::'+text[start:start+2800].replace('%','%25').replace('\r','%0D').replace('\n','%0A'))
+          PY
