@@ -14,10 +14,18 @@ runs:
       run: |
         $ErrorActionPreference = 'Continue'
         $env:GRADLE_OPTS = "$env:GRADLE_OPTS -Dorg.gradle.internal.http.connectionTimeout=15000 -Dorg.gradle.internal.http.socketTimeout=60000"
-        $tasks = $env:HC_GRADLE_TASKS -split '\s+' | Where-Object { $_ }
+        # PowerShell unwraps a one-item pipeline into a scalar string. Splatting that
+        # scalar forwarded build as b/u/i/l/d; retain an actual string array.
+        [string[]] $taskArgs = @($env:HC_GRADLE_TASKS -split '\s+' | Where-Object { $_ })
+        if ($taskArgs.Count -eq 0) { throw 'No Gradle tasks provided' }
+        $forwarded = & python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' @taskArgs --console=plain
+        $observed = @(ConvertFrom-Json $forwarded)
+        if ($LASTEXITCODE -ne 0 -or ($observed -join ' ') -cne (($taskArgs + '--console=plain') -join ' ')) {
+          throw 'Gradle argument forwarding check failed'
+        }
         for ($attempt = 1; $attempt -le 3; $attempt++) {
           $log = Join-Path $env:RUNNER_TEMP "gradle-$attempt.log"
-          & python tools/build/gradle.py @tasks --console=plain 2>&1 | Tee-Object -FilePath $log
+          & python tools/build/gradle.py @taskArgs --console=plain 2>&1 | Tee-Object -FilePath $log
           $code = $LASTEXITCODE
           if ($code -eq 0) { exit 0 }
           $text = Get-Content -Raw $log
@@ -25,7 +33,7 @@ runs:
           $transport = $text -match 'Read timed out|Connect timed out|Connection timed out|Connection reset|status code (429|502|503|504)'
           if (!$dependency -or !$transport -or $attempt -eq 3) {
             # Check annotations stay accessible even when a client cannot reach the external log host.
-            $details = (($text -split "`n" | Where-Object { $_ -match 'FAILURE:|What went wrong|Could not|timed out|error:|^\s*>' }) -join "`n")
+            $details = [regex]::Match($text, '(?s)\* What went wrong:.*?(?=\* Try:|$)').Value
             if (!$details) { $details = ($text -split "`n" | Select-Object -Last 15) -join "`n" }
             if ($details.Length -gt 3000) { $details = $details.Substring($details.Length - 3000) }
             $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
