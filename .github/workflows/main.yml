@@ -50,14 +50,14 @@ jobs:
 
   package:
     name: Package
-    needs: [version, lint, test]
+    needs: [version, test]
     uses: ./.github/workflows/package.yml
     with:
       version: ${{ needs.version.outputs.version }}
 
   publish:
     name: Publish
-    needs: [version, package]
+    needs: [version, lint, package]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/arena/61fd8987-halfcraft')
     uses: ./.github/workflows/publish.yml
     permissions:
