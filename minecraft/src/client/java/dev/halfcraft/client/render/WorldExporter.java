@@ -306,8 +306,10 @@ public final class WorldExporter {
 			headers[2] = sectionHeader(sx, sy, sz, solidCount);
 			ByteBuffer bits = ByteBuffer.allocate(solidCount > 0 ? 1024 : 0).order(ByteOrder.LITTLE_ENDIAN);
 			if (solidCount > 0) {
-				for (long word : SOLID_BITS) bits.putLong(word);
-				for (long word : TAKE_BITS) bits.putLong(word);
+				for (long word : SOLID_BITS)
+					bits.putLong(word);
+				for (long word : TAKE_BITS)
+					bits.putLong(word);
 			}
 			bodies[2] = bits.flip();
 		}
@@ -331,7 +333,9 @@ public final class WorldExporter {
 				if (!HostLink.tryWriteRender(type, pending.headers[phase], pending.bodies[phase])) return false;
 				LongOpenHashSet known = phase == 0 ? SENT : phase == 1 ? LIT : SOLID;
 				int count = phase == 0 ? pending.vertices : phase == 1 ? pending.lights : pending.solids;
-				if (count > 0) known.add(pending.key); else known.remove(pending.key);
+				if (count > 0) known.add(pending.key);
+				else
+					known.remove(pending.key);
 			}
 			pending.phase++;
 		}

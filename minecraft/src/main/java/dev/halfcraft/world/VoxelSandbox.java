@@ -26,7 +26,8 @@ public final class VoxelSandbox {
 	private static volatile AABB active;
 	private static volatile boolean cancel;
 
-	private record Edit(BlockPos pos, BlockState before, BlockState after) {}
+	private record Edit(BlockPos pos, BlockState before, BlockState after) {
+	}
 
 	private static final class Job {
 		final ServerLevel level;
@@ -49,7 +50,8 @@ public final class VoxelSandbox {
 		}
 	}
 
-	private VoxelSandbox() {}
+	private VoxelSandbox() {
+	}
 
 	public static void init() {
 		ServerTickEvents.END_SERVER_TICK.register(VoxelSandbox::tick);
@@ -59,7 +61,9 @@ public final class VoxelSandbox {
 		});
 	}
 
-	public static boolean active() { return active != null; }
+	public static boolean active() {
+		return active != null;
+	}
 
 	public static boolean contains(BlockPos pos) {
 		return contains(pos.getX(), pos.getY(), pos.getZ());

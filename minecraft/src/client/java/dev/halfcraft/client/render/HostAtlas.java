@@ -275,7 +275,8 @@ final class HostAtlas {
 	 * {@code send}; false from it means "not delivered, try again next time".
 	 */
 	void invalidateAnimations() {
-		for (Animation animation : this.animations) animation.shown = Long.MIN_VALUE;
+		for (Animation animation : this.animations)
+			animation.shown = Long.MIN_VALUE;
 	}
 
 	void animate(long tick, java.util.function.Predicate<Region> send) {

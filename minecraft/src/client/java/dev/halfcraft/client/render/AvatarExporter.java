@@ -111,7 +111,8 @@ final class AvatarExporter implements SubmitNodeCollector {
 	private static final Map<Identifier, Integer> TEXTURE_IDS = new HashMap<>();
 	private static final Set<Identifier> UNUSABLE = new HashSet<>();
 	private static int nextTextureId = 1;
-	private record PendingTexture(Identifier texture, int id, ByteBuffer header, ByteBuffer pixels) {}
+	private record PendingTexture(Identifier texture, int id, ByteBuffer header, ByteBuffer pixels) {
+	}
 	private static PendingTexture pendingTexture;
 	private static boolean textureBackpressured;
 	private static @Nullable ModelBlockRenderer movingBlocks;

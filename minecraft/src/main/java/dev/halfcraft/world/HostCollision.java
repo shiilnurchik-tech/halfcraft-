@@ -43,7 +43,9 @@ public final class HostCollision {
 	private HostCollision() {
 	}
 
-	static int epoch() { return epoch; }
+	static int epoch() {
+		return epoch;
+	}
 
 	public static @Nullable VoxelShape shapeAt(BlockPos pos) {
 		return VoxelSandbox.contains(pos) || SHAPES.isEmpty() ? null : SHAPES.get(pos.asLong());
