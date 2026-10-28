@@ -3,6 +3,7 @@ name: Main
 on:
   push:
     branches: ["**"]
+    paths-ignore: [".github/workflows/build-diagnostics.yml"]
     tags: ["v*.*.*"]
   pull_request:
   workflow_dispatch:

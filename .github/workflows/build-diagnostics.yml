@@ -14,7 +14,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/${{ github.repository }}/actions/jobs/122698243111/logs > mc-build.log
+          gh api repos/${{ github.repository }}/actions/jobs/122698243111/logs > mc-build.log 2>&1 || true
           python - <<'PY'
           import base64
           from pathlib import Path
