@@ -1,4 +1,5 @@
 #include "hc_collision.h"
+#include "hc_stream_budget.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -17,8 +18,8 @@ namespace halfcraft
 		constexpr int         ABOVE = 2;   // regions above the player
 		constexpr int         GRID = REGION_VOXELS;  // voxels per region edge (64)
 		constexpr auto        REFRESH_NEAR = 1000ms;   // re-send regions next to the player this often
-		constexpr auto        FRAME_BUDGET = 2500us;
-		constexpr int         MAX_HARVESTS_PER_FRAME = 3;
+		constexpr auto        FRAME_BUDGET = std::chrono::microseconds(CollisionWorkBudget::frame_us);
+		constexpr int         MAX_HARVESTS_PER_FRAME = CollisionWorkBudget::max_gathers;
 		constexpr int         WANTED_DEPTH = 6;     // regions want_below sends under its point (48 blocks)
 		constexpr std::size_t MAX_WANTED = 64;  // queued at once: a handful of projectiles
 
@@ -140,8 +141,53 @@ namespace halfcraft
 		const auto start = Clock::now();
 		int        done = 0;
 
+		// Pending jobs for places the player already left must not delay collision at the next
+		// teleport destination. Keep the epoch-clear marker and forget discarded bookkeeping so
+		// returning to that region can request it again. The worker's current job remains bounded.
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			for (auto it = queue_.begin(); it != queue_.end();) {
+				if (!it->clear && !it->requested && (std::abs(it->rx - prx) > RADIUS + 1 || std::abs(it->rz - prz) > RADIUS + 1 || it->ry - pry < -BELOW - 1 || it->ry - pry > ABOVE + 1)) {
+					harvested_.erase(region_key(it->rx, it->ry, it->rz));
+					it = queue_.erase(it);
+				} else {
+					++it;
+				}
+			}
+			// A short teleport can leave old jobs inside the retention window. Prioritize the
+			// new destination anyway, without ever moving region data before its clear marker.
+			const auto score = [&](const Job& job) {
+				const long long dx = static_cast<long long>(job.rx) - prx;
+				const long long dy = static_cast<long long>(job.ry) - pry;
+				const long long dz = static_cast<long long>(job.rz) - prz;
+				return dx * dx + dz * dz + 2 * dy * dy;
+			};
+			std::stable_sort(queue_.begin(), queue_.end(), [&](const Job& a, const Job& b) {
+				if (a.clear != b.clear)
+					return a.clear;
+				return score(a) < score(b);
+			});
+		}
+		const auto can_harvest = [&]() {
+			if (done >= MAX_HARVESTS_PER_FRAME || Clock::now() - start >= FRAME_BUDGET)
+				return false;
+			std::lock_guard<std::mutex> lock(mutex_);
+			return CollisionWorkBudget::allows(done, queue_.size(),
+				std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count());
+		};
+
+		// Landing collision must not wait behind a moving door or distant projectile requests.
+		for (int dy : { 0, -1 }) {
+			const auto key = region_key(prx, pry + dy, prz);
+			if (!harvested_.count(key) && can_harvest()) {
+				harvest(prx, pry + dy, prz, source);
+				harvested_[key] = start;
+				++done;
+			}
+		}
+
 		// regions something just moved through: their collision changed.
-		while (!urgent_.empty() && done < MAX_HARVESTS_PER_FRAME * 2) {
+		while (!urgent_.empty() && can_harvest()) {
 			const auto r = urgent_.back();
 			urgent_.pop_back();
 			if (std::abs(r[0] - prx) > RADIUS + 1 || std::abs(r[2] - prz) > RADIUS + 1 || r[1] - pry < -BELOW - 1 || r[1] - pry > ABOVE + 1) {
@@ -153,10 +199,10 @@ namespace halfcraft
 			++done;
 		}
 		// regions minecraft asked for, away from the player
-		while (!wanted_.empty() && done < MAX_HARVESTS_PER_FRAME) {
+		while (!wanted_.empty() && can_harvest()) {
 			const auto r = wanted_.front();
 			wanted_.erase(wanted_.begin());
-			harvest(r[0], r[1], r[2], source);
+			harvest(r[0], r[1], r[2], source, true);
 			harvested_[region_key(r[0], r[1], r[2])] = start;
 			++done;
 		}
@@ -168,6 +214,10 @@ namespace halfcraft
 			const bool is_near = std::abs(o[0]) <= 1 && std::abs(o[2]) <= 1 && o[1] >= -1 && o[1] <= 0;
 			if (it != harvested_.end() && !(is_near && start - it->second > REFRESH_NEAR)) {
 				continue;
+			}
+			if (!can_harvest()) {
+				complete = false;
+				break;
 			}
 			const bool fresh = it == harvested_.end();
 			const auto began = Clock::now();
@@ -207,9 +257,10 @@ namespace halfcraft
 		}
 	}
 
-	void CollisionStreamer::harvest(int rx, int ry, int rz, CollisionSource& source)
+	void CollisionStreamer::harvest(int rx, int ry, int rz, CollisionSource& source, bool requested)
 	{
 		Job job;
+		job.requested = requested;
 		job.rx = rx;
 		job.ry = ry;
 		job.rz = rz;
@@ -219,6 +270,15 @@ namespace halfcraft
 		const float hi[3] = { lo[0] + REGION_SIZE + 1.0f, lo[1] + REGION_SIZE + 1.0f, lo[2] + REGION_SIZE + 1.0f };
 		source.gather(lo, hi, job.prims);
 		std::lock_guard<std::mutex> lock(mutex_);
+		// Movers can invalidate a region again while its old snapshot is still queued. Replace
+		// that snapshot rather than voxelizing several obsolete copies, retaining explicit wants.
+		for (auto& queued : queue_) {
+			if (!queued.clear && queued.epoch == job.epoch && queued.rx == rx && queued.ry == ry && queued.rz == rz) {
+				job.requested |= queued.requested;
+				queued = std::move(job);
+				return;
+			}
+		}
 		queue_.push_back(std::move(job));
 		cv_.notify_one();
 	}
@@ -226,6 +286,7 @@ namespace halfcraft
 	void CollisionStreamer::worker_loop()
 	{
 		std::vector<ColPrimitives::Tri> solid;
+		unsigned                        ordinary_jobs = 0;
 		while (true) {
 			Job job;
 			{
@@ -234,33 +295,43 @@ namespace halfcraft
 				if (stop_) {
 					return;
 				}
-				job = std::move(queue_.front());
-				queue_.pop_front();
+				auto next = queue_.begin();
+				if (!next->clear && CollisionWorkBudget::serve_requested(ordinary_jobs)) {
+					const auto requested = std::find_if(queue_.begin(), queue_.end(), [](const Job& j) { return j.requested && !j.clear; });
+					if (requested != queue_.end())
+						next = requested;
+				}
+				job = std::move(*next);
+				queue_.erase(next);
+				ordinary_jobs = job.requested || job.clear ? 0 : std::min(ordinary_jobs + 1, 3u);
 			}
 			if (job.clear) {
 				std::vector<std::uint8_t> payload(4);
 				std::memcpy(payload.data(), &job.epoch, 4);
-				send(payload, proto::kColClear);
+				send(payload, proto::kColClear, job.epoch);
 			} else if (job.epoch == epoch_.load()) {
 				solid.clear();
 				triangulate(job.prims, solid);
+				if (job.epoch != epoch_.load())
+					continue;
 				send_triangles(job, solid);
+				if (job.epoch != epoch_.load())
+					continue;
 				voxelize(job);
 			}
 		}
 	}
 
-	void CollisionStreamer::send(const std::vector<std::uint8_t>& payload, proto::ColType type)
+	void CollisionStreamer::send(const std::vector<std::uint8_t>& payload, proto::ColType type, std::uint32_t epoch)
 	{
-		for (int attempt = 0; attempt < 2000 && !stop_; ++attempt) {
+		while (!stop_ && epoch == epoch_.load()) {
 			if (link_.write_collision(type, payload.data(), static_cast<std::uint32_t>(payload.size()))) {
 				return;
 			}
 			std::this_thread::sleep_for(1ms);  // ring full: minecraft is behind (or not running)
 		}
-		if (!stop_) {
-			log_warning("collision ring stayed full; dropped a message");
-		}
+		// A timeout must not discard a region already marked as harvested (or the epoch clear).
+		// Only the worker waits; the main-thread producer is bounded by max_queued.
 	}
 
 	void CollisionStreamer::send_triangles(const Job& job, const std::vector<ColPrimitives::Tri>& solid)
@@ -296,7 +367,7 @@ namespace halfcraft
 		if (!out.empty()) {
 			std::memcpy(payload.data() + sizeof(header), out.data(), out.size() * sizeof(proto::ColTri));
 		}
-		send(payload, proto::kColTris);
+		send(payload, proto::kColTris, job.epoch);
 	}
 
 	static_assert(PRIM_SKY == proto::kTriSky);
@@ -306,6 +377,8 @@ namespace halfcraft
 		constexpr int G = GRID;
 		RegionVoxels  solid, sky;
 		voxelize_region(job.prims, job.rx, job.ry, job.rz, solid, &sky);
+		if (job.epoch != epoch_.load())
+			return;
 
 		// pack the non-empty blocks.
 		std::vector<proto::ColBlock> blocks;
@@ -353,6 +426,6 @@ namespace halfcraft
 		if (!blocks.empty()) {
 			std::memcpy(payload.data() + sizeof(header), blocks.data(), blocks.size() * sizeof(proto::ColBlock));
 		}
-		send(payload, proto::kColRegion);
+		send(payload, proto::kColRegion, job.epoch);
 	}
 }

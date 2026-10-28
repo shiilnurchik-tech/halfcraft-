@@ -77,6 +77,25 @@ public final class WorldExporter {
 	private static int sentGeneration = Integer.MIN_VALUE;
 	private static volatile boolean resendWanted; // Half-Life dropped render messages it couldn't read
 	private static int meshesSent;
+	private static boolean clearPending, atlasPending;
+	// One in-flight section pins MESH/LIGHTS until all three messages have been sent.
+	private static PendingSection pendingSection;
+
+	private static final class PendingSection {
+		final long key;
+		final int vertices, lights, solids;
+		final ByteBuffer[] headers, bodies;
+		int phase;
+
+		PendingSection(long key, int vertices, int lights, int solids, ByteBuffer[] headers, ByteBuffer[] bodies) {
+			this.key = key;
+			this.vertices = vertices;
+			this.lights = lights;
+			this.solids = solids;
+			this.headers = headers;
+			this.bodies = bodies;
+		}
+	}
 	private static ClientLevel sentLevel;
 	private static HostAtlas atlas;
 	private static ModelBlockRenderer blockRenderer;
@@ -118,6 +137,18 @@ public final class WorldExporter {
 			resendWanted = false;
 			resendEverything(minecraft, level);
 		}
+		// A loading Source may not consume its ring for seconds. Never sleep on the render thread:
+		// send clear/atlas in order over subsequent frames; HUD capture remains independent.
+		if (clearPending) {
+			if (!HostLink.tryWriteRender(Proto.REN_CLEAR_ALL, ByteBuffer.allocate(0), null)) return;
+			clearPending = false;
+		}
+		if (atlasPending) {
+			ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(atlas.width).putInt(atlas.height).flip();
+			if (!HostLink.tryWriteRender(Proto.REN_ATLAS, header, atlas.pixels.duplicate().clear())) return;
+			atlasPending = false;
+			atlas.invalidateAnimations();
+		}
 		meshDirtySections(level);
 		// Animated textures (water, lava, fire, ...): the frame for this game tick.
 		atlas.animate(level.getGameTime(), region -> {
@@ -131,7 +162,9 @@ public final class WorldExporter {
 	private static void resendEverything(Minecraft minecraft, ClientLevel level) {
 		sentGeneration = HostLink.generation();
 		sentLevel = level;
-		atlas = HostAtlas.build(minecraft);
+		if (atlas == null || atlas.stale(minecraft)) {
+			atlas = HostAtlas.build(minecraft);
+		}
 		HalfCraft.LOG.info("HalfCraft: {} animated textures (water, lava, fire, ...) will play in Half-Life", atlas.animatedSprites());
 		AvatarExporter.reset();
 		ICONS.clear();
@@ -139,10 +172,9 @@ public final class WorldExporter {
 		boolean ao = minecraft.options.ambientOcclusion().get();
 		blockRenderer = new ModelBlockRenderer(ao, true, minecraft.getBlockColors());
 		fluidRenderer = new FluidRenderer(minecraft.getModelManager().getFluidStateModelSet());
-		HostLink.writeRender(Proto.REN_CLEAR_ALL, ByteBuffer.allocate(0), null);
-		ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(atlas.width).putInt(atlas.height).flip();
-		boolean ok = HostLink.writeRender(Proto.REN_ATLAS, header, atlas.pixels.duplicate().clear());
-		HalfCraft.LOG.info("HalfCraft: sent {}x{} texture atlas to Half-Life ({})", atlas.width, atlas.height, ok ? "ok" : "FAILED");
+		clearPending = true;
+		atlasPending = true;
+		pendingSection = null;
 		SENT.clear();
 		LIT.clear();
 		SOLID.clear();
@@ -171,6 +203,7 @@ public final class WorldExporter {
 		// Real meshing is limited per frame.
 		long deadline = System.nanoTime() + 3_000_000L;
 		int meshed = 0;
+		if (!flushSection()) return;
 		while (meshed < SECTIONS_PER_FRAME && System.nanoTime() < deadline) {
 			long key;
 			synchronized (DIRTY) {
@@ -182,6 +215,7 @@ public final class WorldExporter {
 			if (meshSection(level, key)) {
 				meshed++;
 			}
+			if (pendingSection != null) break;
 		}
 	}
 
@@ -261,48 +295,51 @@ public final class WorldExporter {
 		if (MESH.vertexCount() == 0 && !SENT.contains(key) && lightCount == 0 && !LIT.contains(key) && solidCount == 0 && !SOLID.contains(key)) {
 			return true;
 		}
-		ByteBuffer header = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(MESH.vertexCount()).flip();
-		if (HostLink.writeRender(Proto.REN_SECTION, header, MESH.bytes())) {
-			if (MESH.vertexCount() > 0) {
-				SENT.add(key);
-			} else {
-				SENT.remove(key);
-			}
-			if (lightCount > 0 || LIT.contains(key)) {
-				ByteBuffer lightHeader = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(lightCount).flip();
-				if (!HostLink.writeRender(Proto.REN_LIGHTS, lightHeader, LIGHTS.flip())) {
-					markDirty(sx, sy, sz); // ring full; send both again later
-				} else if (lightCount > 0) {
-					LIT.add(key);
-				} else {
-					LIT.remove(key);
-				}
-			}
-			if (solidCount > 0 || SOLID.contains(key)) {
-				ByteBuffer solidHeader = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(solidCount).flip();
-				ByteBuffer bits = ByteBuffer.allocate(solidCount > 0 ? 1024 : 0).order(ByteOrder.LITTLE_ENDIAN);
-				if (solidCount > 0) {
-					for (long word : SOLID_BITS) {
-						bits.putLong(word);
-					}
-					for (long word : TAKE_BITS) {
-						bits.putLong(word);
-					}
-				}
-				if (!HostLink.writeRender(Proto.REN_SOLIDS, solidHeader, bits.flip())) {
-					markDirty(sx, sy, sz);
-				} else if (solidCount > 0) {
-					SOLID.add(key);
-				} else {
-					SOLID.remove(key);
-				}
-			}
-			if (++meshesSent <= 10 || meshesSent % 200 == 0) {
-				HalfCraft.LOG.info("HalfCraft: block mesh for section {} {} {}: {} vertices ({} sections in Half-Life)", sx, sy, sz, MESH.vertexCount(), SENT.size());
-			}
-		} else {
-			markDirty(sx, sy, sz); // ring full; try again later
+		ByteBuffer[] headers = new ByteBuffer[3], bodies = new ByteBuffer[3];
+		headers[0] = sectionHeader(sx, sy, sz, MESH.vertexCount());
+		bodies[0] = MESH.bytes();
+		if (lightCount > 0 || LIT.contains(key)) {
+			headers[1] = sectionHeader(sx, sy, sz, lightCount);
+			bodies[1] = LIGHTS.duplicate().flip();
 		}
+		if (solidCount > 0 || SOLID.contains(key)) {
+			headers[2] = sectionHeader(sx, sy, sz, solidCount);
+			ByteBuffer bits = ByteBuffer.allocate(solidCount > 0 ? 1024 : 0).order(ByteOrder.LITTLE_ENDIAN);
+			if (solidCount > 0) {
+				for (long word : SOLID_BITS) bits.putLong(word);
+				for (long word : TAKE_BITS) bits.putLong(word);
+			}
+			bodies[2] = bits.flip();
+		}
+		pendingSection = new PendingSection(key, MESH.vertexCount(), lightCount, solidCount, headers, bodies);
+		flushSection();
+		return true;
+	}
+
+	private static ByteBuffer sectionHeader(int sx, int sy, int sz, int count) {
+		return ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(count).flip();
+	}
+
+	/** Retry only the unsent tail. No remeshing or resending the large geometry before its lights. */
+	private static boolean flushSection() {
+		PendingSection pending = pendingSection;
+		if (pending == null) return true;
+		while (pending.phase < 3) {
+			int phase = pending.phase;
+			if (pending.headers[phase] != null) {
+				int type = phase == 0 ? Proto.REN_SECTION : phase == 1 ? Proto.REN_LIGHTS : Proto.REN_SOLIDS;
+				if (!HostLink.tryWriteRender(type, pending.headers[phase], pending.bodies[phase])) return false;
+				LongOpenHashSet known = phase == 0 ? SENT : phase == 1 ? LIT : SOLID;
+				int count = phase == 0 ? pending.vertices : phase == 1 ? pending.lights : pending.solids;
+				if (count > 0) known.add(pending.key); else known.remove(pending.key);
+			}
+			pending.phase++;
+		}
+		if (++meshesSent <= 10 || meshesSent % 200 == 0) {
+			HalfCraft.LOG.info("HalfCraft: block mesh for section {} {} {}: {} vertices ({} sections in Half-Life)",
+				SectionPos.x(pending.key), SectionPos.y(pending.key), SectionPos.z(pending.key), pending.vertices, SENT.size());
+		}
+		pendingSection = null;
 		return true;
 	}
 

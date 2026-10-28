@@ -10,7 +10,7 @@ public final class Proto {
 
 	// a hash of the layout below but its comments: the host writes it into the header, and Minecraft links only
 	// with a host built from the same schema
-	public static final int LAYOUT = 0xC9F9570D;
+	public static final int LAYOUT = 0x314D996C;
 
 	// ---- where each part of the mapping is
 	public static final long OFF_HEADER = 0x00;
@@ -120,6 +120,7 @@ public final class Proto {
 	public static final int MC_SWIMMING = 1 << 6;
 	public static final int MC_FLYING = 1 << 7;
 	public static final int MC_SLEEPING = 1 << 8; // in a bed: yaw/pitch are the look Minecraft holds there, eyeX/Y/Z its camera
+	public static final int MC_VOXEL_SANDBOX = 1 << 10; // finite voxel sandbox ready; original BSP is replaced by Minecraft blocks
 	public static final int MC_SUBTITLES = 1 << 9; // Minecraft's Show Subtitles option: the host's close captions go to Minecraft (STR_CAPTION)
 	// bits 12-13: kept for the puppet group (A), 14-15 for the world group (C)
 

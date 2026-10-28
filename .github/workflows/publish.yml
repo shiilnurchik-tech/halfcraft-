@@ -7,6 +7,11 @@ on:
         description: halfcraft's version (tools/build/version.py)
         required: true
         type: string
+      dev_draft:
+        description: Create an isolated draft prerelease for the Arena development branch
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -47,3 +52,14 @@ jobs:
         run: |
           gh release delete dev --cleanup-tag --yes || true
           gh release create dev dist/*.zip --prerelease --target "$GITHUB_SHA" --title "HalfCraft $VERSION" --notes-file notes.md
+      - name: Arena dev draft
+        if: inputs.dev_draft
+        run: |
+          cat >> notes.md <<'EOF'
+
+          Experimental development build: finite voxel sandbox plus teleport/transition scheduling changes.
+          Not campaign-safe: use a disposable mirror world; Source NPC/weapon physics are not converted.
+          See docs/voxel-sandbox.md and docs/transition-performance.md in the source checkout.
+          CI compilation/tests do not replace in-game HL2/HL2DM acceptance testing.
+          EOF
+          gh release create "dev-arena-${GITHUB_SHA:0:9}" dist/*.zip --draft --prerelease --target "$GITHUB_SHA" --title "HalfCraft $VERSION — Arena dev" --notes-file notes.md

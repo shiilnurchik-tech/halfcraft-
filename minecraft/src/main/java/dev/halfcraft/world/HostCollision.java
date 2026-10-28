@@ -43,8 +43,10 @@ public final class HostCollision {
 	private HostCollision() {
 	}
 
+	static int epoch() { return epoch; }
+
 	public static @Nullable VoxelShape shapeAt(BlockPos pos) {
-		return SHAPES.isEmpty() ? null : SHAPES.get(pos.asLong());
+		return VoxelSandbox.contains(pos) || SHAPES.isEmpty() ? null : SHAPES.get(pos.asLong());
 	}
 
 	/** Entities (the local player) that collide with Half-Life's exact triangles instead of its voxels. */
@@ -58,7 +60,7 @@ public final class HostCollision {
 
 	/** Adds every Half-Life triangle whose bounds overlap {@code box}. */
 	public static void trianglesNear(net.minecraft.world.phys.AABB box, java.util.List<HostTri> out) {
-		if (TRIS.isEmpty()) {
+		if (VoxelSandbox.overlaps(box) || TRIS.isEmpty()) {
 			return;
 		}
 		int rx0 = Math.floorDiv((int) Math.floor(box.minX), REGION_SIZE), rx1 = Math.floorDiv((int) Math.floor(box.maxX), REGION_SIZE);
@@ -126,12 +128,15 @@ public final class HostCollision {
 
 	/** Fraction (0..1) of this block's volume that is Half-Life geometry. */
 	public static float solidFraction(BlockPos pos) {
-		Integer fill = FILL.isEmpty() ? null : FILL.get(pos.asLong());
+		Integer fill = VoxelSandbox.contains(pos) || FILL.isEmpty() ? null : FILL.get(pos.asLong());
 		return fill == null ? 0.0F : (fill & 0x3FF) / 512.0F;
 	}
 
 	/** How mobs path through this cell: a {@link NavGrid#classify} result (NavGrid.EMPTY without geometry). */
 	public static int navAt(int x, int y, int z) {
+		if (VoxelSandbox.contains(x, y, z)) {
+			return NavGrid.EMPTY;
+		}
 		Integer fill = FILL.isEmpty() ? null : FILL.get(BlockPos.asLong(x, y, z));
 		return fill == null ? NavGrid.EMPTY : fill >>> FILL_NAV_SHIFT & ((1 << NavGrid.BITS) - 1);
 	}
@@ -144,12 +149,12 @@ public final class HostCollision {
 
 	/** This cell's 8 occupancy layers (bit z * 8 + x of layer y), or null without geometry. Never change them. */
 	public static long @Nullable [] layersAt(int x, int y, int z) {
-		return LAYERS.isEmpty() ? null : LAYERS.get(BlockPos.asLong(x, y, z));
+		return VoxelSandbox.contains(x, y, z) || LAYERS.isEmpty() ? null : LAYERS.get(BlockPos.asLong(x, y, z));
 	}
 
 	/** True if any Half-Life geometry is in this cell. */
 	public static boolean hasGeometry(BlockPos pos) {
-		return !FILL.isEmpty() && FILL.containsKey(pos.asLong());
+		return !VoxelSandbox.contains(pos) && !FILL.isEmpty() && FILL.containsKey(pos.asLong());
 	}
 
 	/** A fluid keeps at least this much of its cell above the Half-Life floor it rests on. */
@@ -194,6 +199,9 @@ public final class HostCollision {
 
 	/** True if Half-Life ground holds up whatever is in this cell (terrain in its lower half or the top of the cell below). */
 	public static boolean supportsFromBelow(BlockPos pos) {
+		if (VoxelSandbox.contains(pos)) {
+			return false;
+		}
 		if (FILL.isEmpty()) {
 			return false;
 		}
@@ -320,6 +328,7 @@ public final class HostCollision {
 	}
 
 	private static void clear(int newEpoch) {
+		VoxelSandbox.collisionReset();
 		// forgotten before the shapes go: whatever holds still until its region is known (the player,
 		// mobs) never sees a known region without its ground
 		KNOWN_REGIONS.clear();

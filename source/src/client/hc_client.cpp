@@ -181,6 +181,7 @@ namespace halfcraft
 
 			void Shutdown() override
 			{
+				restore_voxel_view();
 				blocks_shutdown();
 				text_input_detach();
 				auto& s = client_session();
@@ -193,14 +194,41 @@ namespace halfcraft
 			void Update(float frametime) override { update(frametime); }
 
 			// every level load: a map change, a transition, a save loaded (also of the same map)
-			void LevelInitPostEntity() override { level_loaded_ = true; }
+			void LevelInitPostEntity() override
+			{
+				restore_voxel_view();
+				voxel_wait_reset_ = true;
+				level_loaded_ = true;
+			}
 
 		private:
+			void restore_voxel_view()
+			{
+				if (!voxel_hidden_)
+					return;
+				ConVarRef world("r_drawworld"), props("r_drawstaticprops"), novis("r_novis"), occlusion("r_occlusion");
+				if (world.IsValid())
+					world.SetValue(saved_world_);
+				if (props.IsValid())
+					props.SetValue(saved_props_);
+				if (novis.IsValid())
+					novis.SetValue(saved_novis_);
+				if (occlusion.IsValid())
+					occlusion.SetValue(saved_occlusion_);
+				voxel_hidden_ = false;
+			}
+
 			void update(float frametime);
 
 			const char*   takeover_ = nullptr;
 			PlatformWatch platform_;
 			bool          level_loaded_ = false;
+			bool          voxel_hidden_ = false;
+			bool          voxel_wait_reset_ = true;
+			int           saved_world_ = 1;
+			int           saved_props_ = 1;
+			int           saved_novis_ = 0;
+			int           saved_occlusion_ = 1;
 		};
 
 		HalfCraftClientSystem g_client_system;
@@ -216,10 +244,16 @@ namespace halfcraft
 			s.overlay_divisor = overlay_divisor_for(s.viewport_w, s.viewport_h);
 
 			// ---- minecraft -------------------------------------------------------------------
-			const bool mc_alive = s.link.mc_alive();
-			s.have_mc = mc_alive && s.link.read_mc_state(s.mc);
-			const auto mc_pid = s.link.mc_pid();
-			const bool new_mc_process = mc_pid != 0 && mc_pid != s.last_mc_pid;
+			const bool     mc_alive = s.link.mc_alive();
+			proto::McState next_mc{};
+			const bool     fresh_mc = mc_alive && s.link.read_mc_state(next_mc);
+			const auto     mc_pid = s.link.mc_pid();
+			const bool     new_mc_process = mc_pid != 0 && mc_pid != s.last_mc_pid;
+			// A seqlock collision is not a disconnect. Keep the last complete snapshot for the
+			// same live process instead of hiding the HUD and dropping puppet ownership for a frame.
+			s.have_mc = mc_alive && (fresh_mc || (s.have_mc && !new_mc_process));
+			if (fresh_mc)
+				s.mc = next_mc;
 			if (new_mc_process) {
 				s.last_mc_pid = mc_pid;
 			}
@@ -235,6 +269,34 @@ namespace halfcraft
 			}
 			s.mc_was_alive = mc_alive;
 			s.mc_in_world = s.have_mc && (s.mc.flags & proto::kMcInWorld);
+			// Only hide BSP once Minecraft has finished creating the replacement. Restore the
+			// user's settings on stop, collision epoch changes, map loads and link loss.
+			ConVarRef voxel_mode("hc_voxel_sandbox");
+			ConVarRef draw_world("r_drawworld");
+			ConVarRef draw_props("r_drawstaticprops");
+			ConVarRef novis("r_novis");
+			ConVarRef occlusion("r_occlusion");
+			if (s.have_mc && !(s.mc.flags & proto::kMcVoxelSandbox))
+				voxel_wait_reset_ = false;
+			const bool voxel_hide = !voxel_wait_reset_ && !level_loaded_ && s.mc_in_world &&
+				(s.mc.flags & proto::kMcVoxelSandbox) && voxel_mode.IsValid() && voxel_mode.GetBool();
+			if (voxel_hide && !voxel_hidden_) {
+				saved_world_ = draw_world.IsValid() ? draw_world.GetInt() : 1;
+				saved_props_ = draw_props.IsValid() ? draw_props.GetInt() : 1;
+				saved_novis_ = novis.IsValid() ? novis.GetInt() : 0;
+				saved_occlusion_ = occlusion.IsValid() ? occlusion.GetInt() : 1;
+			}
+			if (voxel_hide != voxel_hidden_) {
+				if (draw_world.IsValid())
+					draw_world.SetValue(voxel_hide ? 0 : saved_world_);
+				if (draw_props.IsValid())
+					draw_props.SetValue(voxel_hide ? 0 : saved_props_);
+				if (novis.IsValid())
+					novis.SetValue(voxel_hide ? 1 : saved_novis_);
+				if (occlusion.IsValid())
+					occlusion.SetValue(voxel_hide ? 0 : saved_occlusion_);
+			}
+			voxel_hidden_ = voxel_hide;
 			const bool screen_open = s.have_mc && (s.mc.flags & proto::kMcScreenOpen);
 			if (screen_open && !s.mc_screen_open) {
 				s.cursor_x = s.viewport_w / 2;
@@ -337,8 +399,20 @@ namespace halfcraft
 				s.pitch = view.x;
 			}
 
+			// Scripted chains (Kleiner's teleporter) can move Source again before Minecraft has
+			// acknowledged the previous stop. Follow the new target immediately, not after the
+			// one-second mismatch watchdog. Comparing to the requested target avoids retry storms
+			// while Minecraft is simply loading that same destination.
+			if (s.have_mc && s.mc.teleportAck != s.teleport_seq && s.have_teleport_target &&
+				!s.loading && !takeover && distance(origin, s.teleport_target) > TELEPORT_THRESHOLD) {
+				s.teleport_pending = true;
+			}
 			if (s.teleport_pending && !s.loading) {
 				++s.teleport_seq;
+				s.teleport_target[0] = origin[0];
+				s.teleport_target[1] = origin[1];
+				s.teleport_target[2] = origin[2];
+				s.have_teleport_target = true;
 				s.teleport_pending = false;
 				QAngle angles;
 				engine->GetViewAngles(angles);
@@ -469,6 +543,9 @@ namespace halfcraft
 		cmd->hc_velocity.Init(static_cast<float>(s.mc.curX - s.mc.prevX) * units_per_second, static_cast<float>(-(s.mc.curZ - s.mc.prevZ)) * units_per_second,
 			static_cast<float>(s.mc.curY - s.mc.prevY) * units_per_second);
 
+		if (s.mc.flags & proto::kMcVoxelSandbox) {
+			cmd->hc_flags |= HC_CMD_VOXEL_SANDBOX;
+		}
 		cmd->hc_flags |= HC_CMD_PUPPET | jump_flags(s, feet);  // on top of weapon_create_move's
 		if (s.mc.flags & proto::kMcOnGround) {
 			cmd->hc_flags |= HC_CMD_ON_GROUND;

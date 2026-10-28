@@ -38,6 +38,10 @@ public final class HostClient {
 	private static int lastTeleportSeq = -1;
 	private static int teleportAck;
 	private static boolean teleportPending;
+	// New destinations supersede queued server teleports before they load another set of chunks.
+	private static volatile long teleportRequest;
+	private static volatile long appliedTeleportRequest;
+	private static long waitingTeleportRequest;
 	private static LocalPlayer lastPlayer;
 	private static Vec3 holdPos;
 	private static Vec3 unlinkedHold;
@@ -97,6 +101,8 @@ public final class HostClient {
 				HostCollision.startConsumer();
 				applyLinkedOptions();
 			} else {
+				++teleportRequest; // invalidate tasks queued against the previous host session
+				teleportPending = true;
 				InputBridge.releaseAll();
 				LocalPlayer player = Minecraft.getInstance().player;
 				unlinkedHold = player != null ? player.position() : null;
@@ -119,6 +125,7 @@ public final class HostClient {
 
 		LocalPlayer player = minecraft.player;
 		if (player == null) {
+			if (lastPlayer != null) ++teleportRequest;
 			lastPlayer = null;
 			return;
 		}
@@ -133,10 +140,11 @@ public final class HostClient {
 			teleportPending = true;
 		}
 		if (teleportPending && host.inGame() && !host.loading()) {
-			requestTeleport(minecraft, host.posX, host.posY, host.posZ, host.yaw, host.pitch);
+			if (!requestTeleport(minecraft, host.posX, host.posY, host.posZ, host.yaw, host.pitch)) return;
 			teleportAck = host.teleportSeq;
 			teleportPending = false;
 			holdPos = new Vec3(host.posX, host.posY, host.posZ);
+			holdSince = 0;
 		}
 
 		// Look direction is driven by Half-Life (zero-latency camera); MC uses it for everything else.
@@ -281,7 +289,7 @@ public final class HostClient {
 		boolean known = HostCollision.isKnown(bx, by - 1, bz) && HostCollision.isKnown(bx, by, bz)
 			&& HostCollision.isKnown(bx, by - HostCollision.REGION_SIZE, bz);
 		// Release once there is actual ground below (or after a timeout, e.g. when mid-air on purpose).
-		boolean ready = known && (HostCollision.hasSolidBelow(bx, by, bz, 12) || System.currentTimeMillis() - holdSince > 6000);
+		boolean ready = appliedTeleportRequest == waitingTeleportRequest && known && (HostCollision.hasSolidBelow(bx, by, bz, 12) || System.currentTimeMillis() - holdSince > 6000);
 		if (ready && host.inGame() && !host.loading()) {
 			// Half-Life's feet can sit a fraction of a voxel inside our ground layer. Minecraft's
 			// collision never pushes you out of a shape, so you'd drop through: lift out first.
@@ -313,15 +321,19 @@ public final class HostClient {
 		return !Double.isNaN(ground) && ground > pos.y ? new Vec3(pos.x, ground, pos.z) : pos;
 	}
 
-	private static void requestTeleport(Minecraft minecraft, double x, double y, double z, float yaw, float pitch) {
+	private static boolean requestTeleport(Minecraft minecraft, double x, double y, double z, float yaw, float pitch) {
 		LocalPlayer player = minecraft.player;
+		var server = minecraft.getSingleplayerServer();
+		if (player == null || server == null) return false;
 		player.setPos(x, y, z);
 		player.setDeltaMovement(Vec3.ZERO);
 		player.resetFallDistance();
-		var server = minecraft.getSingleplayerServer();
-		if (server != null) {
+		{
 			var uuid = player.getUUID();
+			long request = ++teleportRequest;
+			waitingTeleportRequest = request;
 			server.execute(() -> {
+				if (request != teleportRequest) return;
 				ServerPlayer sp = server.getPlayerList().getPlayer(uuid);
 				if (sp != null) {
 					// Half-Life's own: not one of Minecraft's jumps for it to take
@@ -329,10 +341,12 @@ public final class HostClient {
 					sp.setYRot(yaw);
 					sp.setXRot(pitch);
 					sp.resetFallDistance();
+					appliedTeleportRequest = request;
 				}
 			});
 		}
 		HalfCraft.LOG.info("HalfCraft: teleported to {} {} {}", x, y, z);
+		return true;
 	}
 
 	/** After GameRenderer.render(): report the player to Half-Life and ship the overlay frame. */
@@ -407,6 +421,9 @@ public final class HostClient {
 		if (minecraft.options.showSubtitles().get()) {
 			flags |= Proto.MC_SUBTITLES;
 		}
+		if (dev.halfcraft.world.VoxelSandbox.active()) {
+			flags |= Proto.MC_VOXEL_SANDBOX;
+		}
 		mc.flags = flags;
 		mc.sensitivity = minecraft.options.sensitivity().get().floatValue();
 		mc.teleportAck = holdPos == null ? teleportAck : teleportAck - 1; // not "arrived" until we are released
@@ -415,6 +432,7 @@ public final class HostClient {
 		HostLink.writeMcState(mc);
 
 		if ((flags & Proto.MC_IN_WORLD) != 0) {
+			FrameExporter.capture(minecraft);
 			try {
 				WorldExporter.frame(minecraft, minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false));
 			} catch (RuntimeException e) {
@@ -427,7 +445,6 @@ public final class HostClient {
 					exporterErrorLogged = now;
 				}
 			}
-			FrameExporter.capture(minecraft);
 		}
 	}
 
@@ -467,8 +484,8 @@ public final class HostClient {
 		options.framerateLimit().set(260);
 		// Minecraft doesn't draw the world itself; these only decide how far out placed blocks,
 		// arrows and Half-Life NPC stand-ins stay loaded and simulated.
-		options.renderDistance().set(8);
-		options.simulationDistance().set(8);
+		options.renderDistance().set(Math.clamp(Integer.getInteger("halfcraft.renderDistance", 5), 2, 16));
+		options.simulationDistance().set(Math.clamp(Integer.getInteger("halfcraft.simulationDistance", 4), 2, 16));
 		options.autoJump().set(false);
 		options.onboardAccessibility = false;
 		if (options.tutorialStep != net.minecraft.client.tutorial.TutorialSteps.NONE) {

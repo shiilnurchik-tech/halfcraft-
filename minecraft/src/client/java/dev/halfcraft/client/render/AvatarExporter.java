@@ -111,6 +111,9 @@ final class AvatarExporter implements SubmitNodeCollector {
 	private static final Map<Identifier, Integer> TEXTURE_IDS = new HashMap<>();
 	private static final Set<Identifier> UNUSABLE = new HashSet<>();
 	private static int nextTextureId = 1;
+	private record PendingTexture(Identifier texture, int id, ByteBuffer header, ByteBuffer pixels) {}
+	private static PendingTexture pendingTexture;
+	private static boolean textureBackpressured;
 	private static @Nullable ModelBlockRenderer movingBlocks;
 	private static boolean warnedEntity;
 
@@ -144,6 +147,8 @@ final class AvatarExporter implements SubmitNodeCollector {
 		TEXTURE_IDS.clear();
 		UNUSABLE.clear();
 		nextTextureId = 1;
+		pendingTexture = null;
+		textureBackpressured = false;
 		AVATAR.shown = false;
 		SCENE.shown = false;
 		RAGDOLL.shown = false;
@@ -152,6 +157,8 @@ final class AvatarExporter implements SubmitNodeCollector {
 	}
 
 	static void frame(Minecraft minecraft, HostAtlas atlas, float partialTick) {
+		textureBackpressured = false;
+		flushTexture();
 		AVATAR.exportAvatar(minecraft, atlas, partialTick);
 		SCENE.exportScene(minecraft, atlas, partialTick);
 		long now = System.nanoTime();
@@ -494,7 +501,7 @@ final class AvatarExporter implements SubmitNodeCollector {
 			header.putDouble(0).putDouble(0).putDouble(0);
 		}
 		header.putInt(0).putInt(0).flip();
-		this.shown = !HostLink.writeRender(message, header, null);
+		this.shown = !HostLink.tryWriteRender(message, header, null);
 	}
 
 	// ---- batches ---------------------------------------------------------------------------------
@@ -720,6 +727,9 @@ final class AvatarExporter implements SubmitNodeCollector {
 		if (known != null) {
 			return known;
 		}
+		if (textureBackpressured || !flushTexture()) return -1;
+		known = TEXTURE_IDS.get(texture);
+		if (known != null) return known;
 		if (UNUSABLE.contains(texture)) {
 			return -1;
 		}
@@ -732,6 +742,13 @@ final class AvatarExporter implements SubmitNodeCollector {
 		int id = nextTextureId++;
 		try (image) {
 			int w = image.getWidth(), h = image.getHeight();
+			long bytes = (long) w * h * 4;
+			if (w <= 0 || h <= 0 || bytes + 24 > Proto.RR_DATA_BYTES / 2) {
+				nextTextureId--;
+				UNUSABLE.add(texture);
+				HalfCraft.LOG.warn("HalfCraft: texture {} is too large for the render ring", texture);
+				return -1;
+			}
 			ByteBuffer pixels = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.LITTLE_ENDIAN);
 			for (int y = 0; y < h; y++) {
 				for (int x = 0; x < w; x++) {
@@ -741,14 +758,23 @@ final class AvatarExporter implements SubmitNodeCollector {
 			}
 			pixels.flip();
 			ByteBuffer header = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(id).putInt(w).putInt(h).putInt(0).flip();
-			if (!HostLink.writeRender(Proto.REN_TEXTURE, header, pixels)) {
-				nextTextureId--;
-				return -1;
-			}
+			pendingTexture = new PendingTexture(texture, id, header, pixels);
+			if (!flushTexture()) return -1;
 		}
-		TEXTURE_IDS.put(texture, id);
-		HalfCraft.LOG.info("HalfCraft: sent texture {} to Half-Life (id {})", texture, id);
 		return id;
+	}
+
+	private static boolean flushTexture() {
+		PendingTexture pending = pendingTexture;
+		if (pending == null) return true;
+		if (textureBackpressured || !HostLink.tryWriteRender(Proto.REN_TEXTURE, pending.header(), pending.pixels())) {
+			textureBackpressured = true;
+			return false;
+		}
+		TEXTURE_IDS.put(pending.texture(), pending.id());
+		HalfCraft.LOG.info("HalfCraft: sent texture {} to Half-Life (id {})", pending.texture(), pending.id());
+		pendingTexture = null;
+		return true;
 	}
 
 	/** A texture's pixels: resource packs, a runtime texture (downloaded skins), or an atlas. Caller closes it. */

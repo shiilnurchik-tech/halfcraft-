@@ -22,6 +22,7 @@ namespace halfcraft
 	/// CUserCmd::hc_flags
 	enum UserCmdFlag : int
 	{
+		HC_CMD_VOXEL_SANDBOX = 1 << 7, // opt-in voxel sandbox; requires hc_voxel_sandbox on the server
 		HC_CMD_PUPPET = 1 << 0,     // minecraft moved the player: hc_origin and hc_velocity are set
 		HC_CMD_ON_GROUND = 1 << 1,  // minecraft's player stands on something
 		HC_CMD_LOW_POSE = 1 << 2,   // sneaking, crawling or swimming: source uses its ducked hull

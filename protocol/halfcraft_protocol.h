@@ -9,7 +9,7 @@ namespace halfcraft::proto
 {
 	// a hash of the layout below but its comments: the host writes it into the header, and Minecraft links only
 	// with a host built from the same schema
-	inline constexpr std::uint32_t kLayout = 0xC9F9570D;
+	inline constexpr std::uint32_t kLayout = 0x314D996C;
 
 	// ---- where each part of the mapping is ----------------------------------------------------------
 	inline constexpr std::uint64_t kOffHeader = 0x00;
@@ -116,15 +116,16 @@ namespace halfcraft::proto
 	enum McFlags : std::uint32_t
 	{
 		kMcInWorld = 1u << 0,
-		kMcScreenOpen = 1u << 1,  // an MC GUI screen (inventory, chat, ...) is open
+		kMcScreenOpen = 1u << 1,     // an MC GUI screen (inventory, chat, ...) is open
 		kMcOnGround = 1u << 2,
 		kMcSneaking = 1u << 3,
 		kMcSprinting = 1u << 4,
 		kMcDead = 1u << 5,
 		kMcSwimming = 1u << 6,
 		kMcFlying = 1u << 7,
-		kMcSleeping = 1u << 8,    // in a bed: yaw/pitch are the look Minecraft holds there, eyeX/Y/Z its camera
-		kMcSubtitles = 1u << 9,   // Minecraft's Show Subtitles option: the host's close captions go to Minecraft (kStrCaption)
+		kMcSleeping = 1u << 8,       // in a bed: yaw/pitch are the look Minecraft holds there, eyeX/Y/Z its camera
+		kMcVoxelSandbox = 1u << 10,  // finite voxel sandbox ready; original BSP is replaced by Minecraft blocks
+		kMcSubtitles = 1u << 9,      // Minecraft's Show Subtitles option: the host's close captions go to Minecraft (kStrCaption)
 		// bits 12-13: kept for the puppet group (A), 14-15 for the world group (C)
 	};
 

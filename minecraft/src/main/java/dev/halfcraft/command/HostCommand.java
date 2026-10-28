@@ -31,6 +31,9 @@ public final class HostCommand {
 
 	/** Runs {@code command} (normalized) as {@code player}. Server thread only. */
 	public static void run(ServerPlayer player, String command) {
+		if (dev.halfcraft.world.VoxelSandbox.command(player, command)) {
+			return;
+		}
 		HalfCraft.LOG.info("HalfCraft: hc_mc {}", command);
 		CommandSourceStack source = player.createCommandSourceStack()
 			.withSource(new Feedback(player, command))

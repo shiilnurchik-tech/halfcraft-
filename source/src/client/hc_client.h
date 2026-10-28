@@ -57,6 +57,8 @@ namespace halfcraft
 		std::uint32_t teleport_seq = 1;
 		bool          teleport_pending = true;
 		float         hold_mismatch = 0.0f;
+		float         teleport_target[3] = {}; // last requested destination, Source units
+		bool          have_teleport_target = false;
 
 		// the map
 		std::uint32_t world_id = 0;

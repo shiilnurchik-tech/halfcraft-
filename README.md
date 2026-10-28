@@ -83,6 +83,24 @@ Makefile         the tasks, wrapping tools/
 | Input | everything goes to Minecraft except the console, Esc (when no Minecraft screen is open), F6/F7/F9/F10, Source's use (G, or whatever key Half-Life's keyboard options bind to it) and V (flashlight). Carrying a prop picked up with use, the left mouse button throws it and the right one drops it; it's left out of Minecraft's collision meanwhile. On ladders and rides Source has the keyboard, but the mouse buttons, the wheel and the hotbar keys stay Minecraft's, and a screen they open there (a chest, a crafting table) has the keyboard and mouse until it closes |
 | Weapons | Half-Life's weapons are Minecraft items, one per weapon the player owns: Source's inventory decides, so what it picks up appears in the hotbar and what a map takes away goes (saves too); the items can't be dropped or put into containers. Holding one takes the weapon out in Half-Life (anything else in the hand puts it away), and while it's out the mouse buttons fire and alt-fire it and R reloads it; Half-Life's viewmodel replaces Minecraft's hand in first person, and the item's bar, its tooltip and the action bar show the ammo. When the weapon out runs dry (the last grenade thrown), Half-Life switches to the next one as it does and the hand follows it on the hotbar; a scene that keeps the weapons away (player_speedmod) keeps the hand's away too. The gravity gun tears Minecraft's blocks out of builds within its reach (pulled or punted; whole cubes without a block entity, softer than obsidian): a physics cube with the block's faces that sounds and weighs like its material, which turns back into the block where it comes to rest, like falling sand, or drops as an item without room |
 
+## Experimental voxel mining
+
+An opt-in finite voxel sandbox converts a **25×17×25** area of streamed Half-Life collision to real
+Minecraft stone blocks, with vanilla pickaxe mining, cracks, particles and cobblestone drops. This
+replaces the visible world in sandbox mode; it does **not** destructively edit the campaign's BSP.
+Use only a disposable/test mirror world. Source weapons, NPC physics and campaign saves are not
+supported in the converted area. See [setup, commands, limitations and test checklist](docs/voxel-sandbox.md).
+
+After rebuilding both sides and waiting for collision to stream, stand still and enter in HL2's console:
+
+```text
+sv_cheats 1
+hc_voxel_sandbox 1
+hc_mc halfcraft_voxelize
+```
+
+Stop with `hc_mc halfcraft_voxelize stop` **before** disabling `hc_voxel_sandbox`.
+
 ## Build and run
 
 Needs Visual Studio 2022+ (C++ desktop workload with its x64 and x86 tools), Python 3.13+, Git, GNU
@@ -167,3 +185,10 @@ from it, under the MIT license (see `LICENSE`).
 
 HalfCraft isn't affiliated with or endorsed by Valve, Mojang or Microsoft. See
 `THIRD-PARTY-NOTICES.md` for what it's built from.
+
+### Teleport and transition performance
+
+World export no longer waits for ring space on Minecraft's render thread; collision scheduling is
+bounded and obsolete queued regions are deprioritized after teleports. Linked Minecraft defaults to
+5 chunks render distance / 4 simulation (JVM properties can restore 8/8). See
+[changes, caveats and the Kleiner teleport regression checklist](docs/transition-performance.md).

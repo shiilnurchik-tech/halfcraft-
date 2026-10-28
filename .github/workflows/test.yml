@@ -12,6 +12,23 @@ permissions:
   contents: read
 
 jobs:
+  core:
+    name: Portable C++ regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Budget, fairness and excavation (ASan + UBSan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test in stream_budget excavation; do
+            g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g -Isource/src "tools/tests/${test}_test.cpp" -o "$RUNNER_TEMP/${test}_test"
+            "$RUNNER_TEMP/${test}_test"
+          done
+
   minecraft:
     name: Minecraft mod
     runs-on: windows-2025

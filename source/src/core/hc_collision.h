@@ -63,12 +63,13 @@ namespace halfcraft
 			int           rx = 0, ry = 0, rz = 0;
 			std::uint32_t epoch = 0;
 			bool          clear = false;
+			bool          requested = false; // explicit projectile column, retained away from the player
 			ColPrimitives prims;
 		};
 
-		void harvest(int rx, int ry, int rz, CollisionSource& source);
+		void harvest(int rx, int ry, int rz, CollisionSource& source, bool requested = false);
 		void worker_loop();
-		void send(const std::vector<std::uint8_t>& payload, proto::ColType type);
+		void send(const std::vector<std::uint8_t>& payload, proto::ColType type, std::uint32_t epoch);
 		void send_triangles(const Job& job, const std::vector<ColPrimitives::Tri>& solid);
 		void voxelize(const Job& job);
 

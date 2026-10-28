@@ -19,6 +19,7 @@ kMcDead = { bit = 5 }
 kMcSwimming = { bit = 6 }
 kMcFlying = { bit = 7 }
 kMcSleeping = { bit = 8, doc = "in a bed: yaw/pitch are the look Minecraft holds there, eyeX/Y/Z its camera" }
+kMcVoxelSandbox = { bit = 10, doc = "finite voxel sandbox ready; original BSP is replaced by Minecraft blocks" }
 kMcSubtitles = { bit = 9, doc = "Minecraft's Show Subtitles option: the host's close captions go to Minecraft (kStrCaption)" }
 
 [structs.McState]

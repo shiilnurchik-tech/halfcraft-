@@ -21,6 +21,9 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+ConVar hc_voxel_sandbox("hc_voxel_sandbox", "0", FCVAR_REPLICATED | FCVAR_CHEAT,
+	"halfcraft: allow finite voxel sandbox movement (experimental; not campaign compatible)");
+
 // units; minecraft's fastest fall covers about 50 per command
 static const float HALFCRAFT_MAX_STEP = 160.0f;
 
@@ -233,7 +236,8 @@ bool CGameMovement::HalfCraftMove(void)
 		return false;
 
 	// minecraft's pose decides the hull: crouched while sneaking, crawling or swimming
-	bool bLow = (cmd->hc_flags & halfcraft::HC_CMD_LOW_POSE) != 0;
+	bool       bLow = (cmd->hc_flags & halfcraft::HC_CMD_LOW_POSE) != 0;
+	const bool bVoxel = hc_voxel_sandbox.GetBool() && (cmd->hc_flags & halfcraft::HC_CMD_VOXEL_SANDBOX);
 
 	// a command minecraft made before source teleported the player would drag them straight back: no
 	// single command moves this far. minecraft's own jumps (its teleports, a fast dive between two
@@ -241,7 +245,7 @@ bool CGameMovement::HalfCraftMove(void)
 	const float flStep = (cmd->hc_origin - mv->GetAbsOrigin()).Length();
 	Vector      vecOrigin = cmd->hc_origin;
 	if (cmd->hc_flags & halfcraft::HC_CMD_JUMP) {
-		bool bFits = HalfCraftFits(this, vecOrigin, bLow);
+		bool bFits = bVoxel || HalfCraftFits(this, vecOrigin, bLow);
 		// under a ceiling only the ducked hull fits under (chorus fruit, a pearl under a low roof) the player
 		// lands ducked, and minecraft's crouches there too: half-life's ceilings keep it down (HostDuck)
 		if (!bFits && !bLow && HalfCraftFits(this, vecOrigin, true)) {
@@ -299,7 +303,7 @@ bool CGameMovement::HalfCraftMove(void)
 	const Vector vecUp = vecOrigin + Vector(0.0f, 0.0f, HALFCRAFT_LIFT);
 	const Vector vecDown = vecOrigin - Vector(0.0f, 0.0f, HALFCRAFT_GROUND_DROP);
 	TryTouchGround(vecUp, vecDown, vecMins, vecMaxs, PlayerSolidMask(), COLLISION_GROUP_PLAYER_MOVEMENT, pm);
-	const bool bGround = (cmd->hc_flags & halfcraft::HC_CMD_ON_GROUND) && pm.m_pEnt && !pm.startsolid && pm.plane.normal.z >= 0.7f;
+	const bool bGround = !bVoxel && (cmd->hc_flags & halfcraft::HC_CMD_ON_GROUND) && pm.m_pEnt && !pm.startsolid && pm.plane.normal.z >= 0.7f;
 	SetGroundEntity(bGround ? &pm : nullptr);
 	CheckWater();
 
@@ -325,7 +329,7 @@ bool CGameMovement::HalfCraftMove(void)
 	// half-life's ladders mount the way half-life mounts them: "use" (G) while looking at one, or
 	// walking into one. source then has the player (it slides them on and sets the ladder movetype)
 	// until they get off, and minecraft picks up from there.
-	if (!(player->GetFlags() & FL_ONTRAIN)) {
+	if (!bVoxel && !(player->GetFlags() & FL_ONTRAIN)) {
 		mv->m_flForwardMove = (cmd->hc_flags & halfcraft::HC_CMD_FORWARD) ? MAX(mv->m_flMaxSpeed, 1.0f) : 0.0f;
 		LadderMove();
 		mv->m_flForwardMove = 0.0f;

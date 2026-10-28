@@ -22,6 +22,7 @@ public final class HalfCraft implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		HostCombat.init();
+		dev.halfcraft.world.VoxelSandbox.init();
 		dev.halfcraft.weapon.HostWeapons.init();
 		// Minecraft's mobs and Half-Life's characters see and fight each other
 		dev.halfcraft.mobs.HostMobs.init();
