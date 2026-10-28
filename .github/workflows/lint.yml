@@ -53,6 +53,9 @@ jobs:
         run: |
           python tools/build/gradle.py spotlessApply
           git diff --binary > java-format.patch
+          # Also expose the small patch through check annotations: restricted clients may not
+          # be able to download artifacts from GitHub's separate blob-storage host.
+          python -c 'import base64; from pathlib import Path; s=base64.b64encode(Path("java-format.patch").read_bytes()).decode(); [print(f"::warning title=java-format-patch-{i // 12000:04d}::{s[i:i+12000]}") for i in range(0, len(s), 12000)]'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
