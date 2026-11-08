@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   bridge:
@@ -58,4 +59,37 @@ jobs:
       - name: Rust toolchain
         run: rustup update stable --no-self-update
       - name: Check actual upstream Hooks and Host (not mock interfaces)
-        run: cargo +stable check --manifest-path horizon/native/api/Cargo.toml
+        shell: pwsh
+        run: |
+          & cargo +stable check --manifest-path horizon/native/api/Cargo.toml 2>&1 | Tee-Object -FilePath native-check.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (Get-Content native-check.log -Tail 100) -join "`n"
+            if ($tail.Length -gt 20000) { $tail = $tail.Substring($tail.Length - 20000) }
+            for ($i = 0; $i -lt $tail.Length; $i += 2500) {
+              $chunk = $tail.Substring($i, [Math]::Min(2500, $tail.Length - $i))
+              $chunk = $chunk.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Horizon native check::$chunk"
+            }
+            exit $code
+          }
+
+  previous-native-diagnostic:
+    name: Recover initial native compiler diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Expose previous failure without external log downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh run view 42492234193 --job 128766907909 --log-failed --allow-escape-sequences > /tmp/previous-native.log
+          python - <<'PYTHON'
+          from pathlib import Path
+          text = Path('/tmp/previous-native.log').read_text()[-18000:]
+          for start in range(0, len(text), 2400):
+              part = text[start:start + 2400].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print(f'::notice title=Previous native compiler output::{part}')
+          PYTHON
