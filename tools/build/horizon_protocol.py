@@ -1,4 +1,4 @@
-"""Generate the Horizon observer's Rust offsets from the existing shared protocol schema."""
+"""Generate the Horizon client's Rust offsets from the existing shared protocol schema."""
 
 import argparse
 import json
@@ -21,10 +21,23 @@ def render() -> str:
         f"pub const MAGIC: u32 = {schema.constants['kMagic'].value};",
         f"pub const MAPPING_NAME: &str = {json.dumps(schema.constants['kMappingName'].value)};",
     ]
-    for name in ("Header", "HostState"):
+    for name, constant in schema.constants.items():
+        if name != "kMagic" and constant.type in ("u16", "u32", "u64"):
+            lines.append(f"pub const {upper_snake(name.removeprefix('k'))}: u64 = {int(schema.value(name))};")
+    for name, item in schema.items.items():
+        lines.append(f"pub const {upper_snake(name.removeprefix('k'))}: u32 = {item.value};")
+    for name in ("Header", "HostState", "McState", "InputEvent"):
         struct = schema.structs[name]
         prefix = upper_snake(name)
-        lines += [f"pub const {prefix}_OFFSET: usize = {schema.regions[name].at};", f"pub const {prefix}_SIZE: usize = {struct.size};"]
+        if name in schema.regions:
+            lines.append(f"pub const {prefix}_OFFSET: usize = {schema.regions[name].at};")
+        lines.append(f"pub const {prefix}_SIZE: usize = {struct.size};")
+    # Input ring is not a struct region; preserve its schema-computed extent.
+    region = schema.regions["InputRing"]
+    lines += [f"pub const INPUT_RING_OFFSET: usize = {region.at};", f"pub const INPUT_RING_SIZE: usize = {region.extent};"]
+    for name in ("Header", "HostState", "McState", "InputEvent"):
+        struct = schema.structs[name]
+        prefix = upper_snake(name)
         lines += [f"pub const {prefix}_{upper_snake(field.name)}: usize = {field.offset};" for field in struct.fields if not field.padding]
     return "\n".join(lines) + "\n"
 

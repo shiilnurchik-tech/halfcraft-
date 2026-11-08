@@ -1,49 +1,77 @@
-# HalfCraft for Horizon — experimental, incomplete
+# HalfCraft for Horizon — native Rust port, in progress
 
-This is the beginning of a **native Rust port**, alongside (not replacing) the
-Fabric client. It is **not yet playable HalfCraft** and is not included in the
-normal HalfCraft release ZIP. No `.hnmod` or tested Horizon executable is supplied.
+The target is the full HalfCraft feature set, not a status-only mod. The Fabric
+client remains usable during migration. **This native build is not yet playable
+HalfCraft** and is not included in the ordinary release ZIP.
 
-## Implemented
+Pinned Horizon source: `11102a56510c0a1b546339ab45e1b141c85e8ebc`.
 
-- Native trait-mod entry point using Horizon's `Hooks::tick`, `Host::client_state`
-  and action-bar service, pinned to source revision
-  `11102a56510c0a1b546339ab45e1b141c85e8ebc`.
-- Windows read-only connection to the existing Source mapping
-  `Local\HalfCraft_v1`; Source must already be running with HalfCraft installed.
-- Schema-generated offsets/layout fingerprint; host heartbeat, session, layout,
-  bounded seqlock reads and finite-position validation.
-- Connection/world/session status in Horizon's log and, on status changes while
-  logged in, its action bar. Unavailable/incompatible hosts are reported, not
-  silently accepted. Retry is capped at once per second.
-- Portable regression tests using the **same bridge source** as the native mod,
-  plus Windows tests and a pinned upstream API compile check in CI. The API
-  check stages the adapter in Horizon's workspace to retain its vendored graphics
-  patches; a standalone `cargo check` of the API crate does not inherit them.
+## Native integration implemented
 
-The mapping is opened **read-only**: no client PID/heartbeat, ready flags, ring
-indices or world buffers are changed. Source keeps its ordinary player authority.
-Do not treat a “Source connected” status as confirmation of a playable port.
-The transport is Windows-only because the current Source integration is Win32;
-other platforms return `UnsupportedPlatform` without creating a fake link.
+- Windows shared-memory transport using the existing Source protocol/layout.
+- Default passive observation without claiming a client slot.
+- Explicit `/halfcraft connect`: claim the client PID atomically, publish its
+  heartbeat, consume the Source input ring, and release ownership on disconnect,
+  world stop or lost session. A nonzero existing PID is **not** evicted. Do not run
+  Fabric and Horizon against the same Source process at the same time.
+- Bounded ring draining (128 events/tick), signed event decoding, physical SDL
+  WASD/jump/sneak state, release-all, one-shot impulses, push-state tracking, and
+  per-channel fragmented UTF-8 strings (64 KiB limit; overflow discarded to END).
+- Actual Horizon movement-input and player-impulse hooks; hints go to the action
+  bar, pickups/captions to chat. Native keyboard movement is retained until Source
+  has supplied a key event. Menu/loading/stale-session guards clear held state.
+- `/halfcraft follow`: the integrated server moves its single spectator player
+  to Source's current position/look. This runs on the authoritative server tick,
+  not by editing a client snapshot. It refuses non-Overworld/non-spectator/dead
+  players, multiple online players, dedicated servers, stale poses and invalid
+  coordinates. It never changes game mode or writes terrain.
+- `/halfcraft unfollow`, `/halfcraft disconnect`, `/halfcraft status`.
+- Shutdown cleanup, portable decoder tests, real named-mapping/ownership/input
+  tests on Windows, schema parity, and compilation against actual upstream APIs.
 
-## Developer build
+**Readiness is deliberately withheld:** the MC_IN_WORLD flag remains zero.
+Source therefore retains its player physics, HUD and keyboard ownership; it does
+not yet forward normal game keys through the full Fabric input path. The new
+native input consumer/hooks are wired, but normal Source-window controls cannot
+be called end-to-end ready until world/collision export permits that handshake.
+Continuous base-push movement, mouse/look, action rebinding and arbitrary Source
+commands are not applied yet. Impulses are converted from blocks/second to
+blocks/tick exactly once. Source command strings are not executed as console code.
 
-Requires Horizon's launcher/native-build prerequisites (including its Rust/native
-build tools). A Fabric JAR cannot be used here. Launcher version numbers do not
-identify the game's native API; the manifest pins the game's source revision.
-From the repository root:
+## Test the current position synchronization
+
+Use a **disposable single-player Overworld** in Horizon. Switch it to spectator
+mode yourself (`/gamemode spectator`, with cheats enabled). Start Source with the
+existing HalfCraft DLLs; in Horizon run:
+
+```text
+/halfcraft follow
+/halfcraft status
+```
+
+Move in Source: the server-tick adapter follows Source's coordinates and look.
+Horizon still draws its own world, **not Source BSP geometry**. Stop with
+`/halfcraft unfollow` or release the connection with `/halfcraft disconnect`.
+A stale occupied PID is intentionally not stolen; close the competing client or
+restart Source if its slot was left by a crashed client.
+
+These are developer test instructions, not an in-game verification claim. No
+Horizon game session has been run in the development sandbox.
+
+## Build and checks
+
+Requires Horizon's launcher/native-build prerequisites. The manifest pins the
+**game source**, not a launcher release number. Native mods run with your account's
+privileges; use a separate instance. From the repository root:
 
 ```text
 horizon-launcher native-build horizon/native --instance HalfCraft --trust-native-code
 ```
 
-Native mods execute with your account's privileges. Use a separate test instance.
-The launcher builds the game with the mod; this is **not a prebuilt DLL** to drop
-into a mods directory. The command and actual in-game integration have not yet
-been verified in this repository's development environment.
+The launcher compiles the game with the mod. This is not a Fabric JAR or a drop-in
+prebuilt DLL. No `.hnmod` or tested game executable is supplied yet.
 
-For bridge tests without fetching/building Horizon:
+Without fetching or building Horizon:
 
 ```sh
 cargo test --locked --manifest-path horizon/bridge-tests/Cargo.toml
@@ -51,18 +79,20 @@ cargo fmt --manifest-path horizon/bridge-tests/Cargo.toml --check
 python tools/build/horizon_protocol.py --check  # Python 3.12+
 ```
 
-After schema changes, regenerate with `python tools/build/horizon_protocol.py`.
+Regenerate offsets/constants after schema edits with
+`python tools/build/horizon_protocol.py`. CI stages the adapter in the pinned
+Horizon workspace, retaining upstream vendored graphics patches and lockfile.
+A standalone `cargo check` of the API crate does not inherit those patches.
 
-## Required before playable release
+## Remaining full-port work
 
-1. Validate the native-mod build against the pinned upstream API and run in game.
-2. Port world/texture/mesh export and incremental streaming/backpressure.
-3. Port Source collision queries, player/camera synchronization and teleport/session
-   resets; only then enable the normal client-ready handshake.
-4. Port input, inventory, damage, gravity-gun block interactions and saves.
-5. Port overlay/HUD, avatar/entities and the connected voxel sandbox.
-6. Exercise reconnect, death/loading screens, map changes and both game processes
-   shutting down. Compare gameplay and performance with the Fabric implementation.
+- World/texture/mesh export, incremental streaming and backpressure.
+- BSP triangles/sub-voxel collision, smooth movement, water, transitions and
+  survival player control; then enable the ordinary gameplay handshake.
+- Mouse/buttons/scroll/text, screens, command execution with player permissions,
+  health/damage, inventory, gravity gun and save/checkpoint parity.
+- Overlay/HUD composition, avatar/entities, textures and connected voxel sandbox.
+- In-game reconnect/death/loading/level-change/shutdown tests and performance
+  comparisons with the Fabric client.
 
-Those features remain implemented in `minecraft/` only. Existing Fabric/Source
-runtime code and the shared-memory layout are unchanged by this experiment.
+The existing Fabric/Source gameplay implementations and wire layout are unchanged.

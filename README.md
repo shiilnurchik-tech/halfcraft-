@@ -196,6 +196,6 @@ bounded and obsolete queued regions are deprioritized after teleports. Linked Mi
 ### Horizon / Minecraft Rust Edition
 
 An experimental native Rust adapter is being developed in [`horizon/`](horizon/README.md).
-It currently observes the Source connection only: world rendering, collision and
-Minecraft gameplay integration are **not ported yet**. Keep using the Fabric build
+It includes native input transport and guarded spectator synchronization with Source;
+world rendering, collision and full gameplay integration are **not ported yet**. Keep using the Fabric build
 for playable HalfCraft; a Horizon launcher download alone cannot run its JAR.

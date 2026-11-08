@@ -1,11 +1,12 @@
-//! Read-only Source transport. Deliberately never advertises Minecraft readiness:
+//! Source transport with an optional exclusive input-consumer lease. No readiness:
 //! until rendering/collision are ported, Source must retain player authority.
-mod generated;
+pub mod generated;
+pub mod input;
 #[cfg(windows)]
 mod windows;
 use generated::*;
 
-pub const VIEW_BYTES: usize = HOST_STATE_OFFSET + HOST_STATE_SIZE;
+pub const VIEW_BYTES: usize = INPUT_RING_OFFSET + INPUT_RING_SIZE;
 const HOST_TIMEOUT_MS: u64 = 8_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub enum LinkError {
     Stale,
     Busy,
     InvalidState,
+    ClientAlreadyConnected,
+    OwnershipLost,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -107,6 +110,15 @@ impl Mapping {
     }
     pub fn read(&self) -> Result<HostSnapshot, LinkError> {
         Err(LinkError::UnsupportedPlatform)
+    }
+    pub fn connect() -> Result<Self, LinkError> {
+        Err(LinkError::UnsupportedPlatform)
+    }
+    pub fn drain_input(&mut self) -> Result<Vec<input::InputEvent>, LinkError> {
+        Err(LinkError::UnsupportedPlatform)
+    }
+    pub fn now_ms() -> u64 {
+        0
     }
 }
 
@@ -206,5 +218,61 @@ mod tests {
             snapshot(|at| words[at / 4], 200),
             Err(LinkError::InvalidState)
         );
+    }
+}
+
+/// Validate producer/consumer distance before touching ring memory. One native
+/// tick handles at most 128 entries; unread data stays queued for the next tick.
+fn read_input_batch(
+    head: u64,
+    tail: u64,
+    mut read: impl FnMut(usize) -> u32,
+) -> Result<(Vec<input::InputEvent>, u64), LinkError> {
+    let pending = head.checked_sub(tail).ok_or(LinkError::InvalidState)?;
+    if pending > INPUT_RING_ENTRIES {
+        return Err(LinkError::InvalidState);
+    }
+    let count = pending.min(128);
+    let mut events = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let index = ((tail + i) & (INPUT_RING_ENTRIES - 1)) as usize;
+        let at = INPUT_RING_OFFSET + INPUT_RING_DATA_OFF as usize + index * INPUT_EVENT_SIZE;
+        events.push(input::InputEvent::from_words(std::array::from_fn(|word| {
+            read(at + word * 4)
+        })));
+    }
+    Ok((events, tail + count))
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::*;
+    #[test]
+    fn malformed_distance_never_reads_memory() {
+        for (head, tail) in [(4, 5), (INPUT_RING_ENTRIES + 1, 0)] {
+            assert_eq!(
+                read_input_batch(head, tail, |_| panic!("invalid ring must not be read")),
+                Err(LinkError::InvalidState)
+            );
+        }
+    }
+    #[test]
+    fn wrap_and_budget_preserve_order() {
+        let start = INPUT_RING_ENTRIES - 1;
+        let mut reads = Vec::new();
+        let (events, tail) = read_input_batch(start + 200, start, |at| {
+            reads.push(at);
+            0
+        })
+        .unwrap();
+        assert_eq!(events.len(), 128);
+        assert_eq!(tail, start + 128);
+        assert_eq!(
+            reads[0],
+            INPUT_RING_OFFSET
+                + INPUT_RING_DATA_OFF as usize
+                + (INPUT_RING_ENTRIES as usize - 1) * INPUT_EVENT_SIZE
+        );
+        assert_eq!(reads[4], INPUT_RING_OFFSET + INPUT_RING_DATA_OFF as usize);
     }
 }
