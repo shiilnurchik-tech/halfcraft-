@@ -211,7 +211,7 @@ impl Hooks for HalfCraft {
         } else {
             state.inputs.clear();
         }
-        let impulse = state.inputs.take_push(Mapping::now_ms());
+        let impulse = state.inputs.take_impulse();
         drop(state);
         if impulse.iter().any(|v| *v != 0.0) {
             host.push_player(impulse);

@@ -118,8 +118,16 @@ impl Inputs {
             self.released = [0.0; 3];
         }
     }
-    /// One 20 Hz tick's change in velocity. A repeated base push contributes
-    /// movement for this tick; impulses and an explicit release transfer once.
+    /// Drain only discrete impulses. Until the engine adapter can apply base
+    /// velocity without accumulating acceleration, it must not transfer a base
+    /// push's release into momentum either.
+    pub fn take_impulse(&mut self) -> [f32; 3] {
+        let impulse = self.impulse.map(|v| (v / 20.0) as f32);
+        self.impulse = [0.0; 3];
+        impulse
+    }
+    /// Combined impulse/release transfer for a future base-velocity adapter;
+    /// ongoing base movement is read separately with base_velocity().
     pub fn take_push(&mut self, now: u64) -> [f32; 3] {
         self.expire(now);
         let result = std::array::from_fn(|i| ((self.impulse[i] + self.released[i]) / 20.0) as f32);
@@ -173,6 +181,16 @@ mod tests {
         assert_eq!(inputs.base_velocity(801), None);
         inputs.accept(event(IN_PUSH, 0, [0; 3]), 802);
         assert_eq!(inputs.take_push(802), [0.0; 3]);
+    }
+    #[test]
+    fn impulse_only_adapter_does_not_apply_unimplemented_base_momentum() {
+        let mut inputs = Inputs::default();
+        inputs.accept(event(IN_PUSH, 0, [2000, 0, 0]), 0);
+        inputs.accept(event(IN_PUSH, 0, [0; 3]), 200);
+        assert_eq!(inputs.take_impulse(), [0.0; 3]);
+        inputs.accept(event(IN_IMPULSE, 0, [1000, 0, 0]), 200);
+        assert_eq!(inputs.take_impulse(), [0.05, 0.0, 0.0]);
+        assert_eq!(inputs.take_impulse(), [0.0; 3]);
     }
     #[test]
     fn strings_unicode_across_fragments_and_channels() {

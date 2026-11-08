@@ -105,6 +105,9 @@ impl Mapping {
         unsafe { self.base.as_ptr().add(at / 4).read_volatile() }
     }
     fn check_owner(&self) -> Result<(), LinkError> {
+        if self.word(HEADER_MAGIC) != MAGIC || self.word(HEADER_LAYOUT) != LAYOUT {
+            return Err(LinkError::Incompatible);
+        }
         let Some((pid, session)) = self.owner else {
             return Err(LinkError::OwnershipLost);
         };
@@ -164,7 +167,10 @@ impl Drop for Mapping {
         // A session reset invalidates the old state, but may leave our claimed
         // pid behind if it raced the initial claim. Release only our own pid;
         // never clear another client's state/heartbeat after ownership loss.
-        if let Some((pid, _)) = self.owner {
+        if let Some((pid, _)) = self
+            .owner
+            .filter(|_| self.word(HEADER_MAGIC) == MAGIC && self.word(HEADER_LAYOUT) == LAYOUT)
+        {
             let _ = self.atomic32(HEADER_MC_PID).compare_exchange(
                 pid,
                 0,
@@ -305,5 +311,31 @@ mod tests {
         assert_eq!(client.read().unwrap().session, 77);
         drop(client);
         assert_eq!(host.get(HEADER_MC_PID), 4242);
+    }
+
+    #[test]
+    fn incompatible_layout_is_never_written_on_drop() {
+        let host = HostView::new();
+        let client = Mapping::open_named(&host.name, true).unwrap();
+        let pid = host.get(HEADER_MC_PID);
+        host.set(HEADER_LAYOUT, LAYOUT ^ 1);
+        host.set(MC_STATE_OFFSET + MC_STATE_FLAGS, 99);
+        host.set64(HEADER_MC_HEARTBEAT_MS, 12345);
+        assert_eq!(client.read(), Err(LinkError::Incompatible));
+        drop(client);
+        assert_eq!(host.get(HEADER_MC_PID), pid);
+        assert_eq!(host.get(MC_STATE_OFFSET + MC_STATE_FLAGS), 99);
+        assert_eq!(host.get(HEADER_MC_HEARTBEAT_MS), 12345);
+    }
+    #[test]
+    fn session_reset_releases_pid_without_publishing_old_state() {
+        let host = HostView::new();
+        let client = Mapping::open_named(&host.name, true).unwrap();
+        host.set64(HEADER_HOST_SESSION, 78);
+        host.set(MC_STATE_OFFSET + MC_STATE_FLAGS, 99);
+        assert_eq!(client.read(), Err(LinkError::OwnershipLost));
+        drop(client);
+        assert_eq!(host.get(HEADER_MC_PID), 0);
+        assert_eq!(host.get(MC_STATE_OFFSET + MC_STATE_FLAGS), 99);
     }
 }
