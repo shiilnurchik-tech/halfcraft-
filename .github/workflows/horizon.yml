@@ -6,6 +6,7 @@ on:
       - 'horizon/**'
       - 'protocol/schema/**'
       - 'tools/build/horizon_protocol.py'
+      - 'tools/build/horizon_check.py'
       - 'tools/halfcraft/protocol.py'
       - '.github/workflows/horizon.yml'
   pull_request:
@@ -13,13 +14,13 @@ on:
       - 'horizon/**'
       - 'protocol/schema/**'
       - 'tools/build/horizon_protocol.py'
+      - 'tools/build/horizon_check.py'
       - 'tools/halfcraft/protocol.py'
       - '.github/workflows/horizon.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   bridge:
@@ -56,12 +57,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: horizon-rust/horizon
+          ref: 11102a56510c0a1b546339ab45e1b141c85e8ebc
+          path: .cache/horizon-upstream
+          persist-credentials: false
+      - name: Stage adapter in pinned workspace (preserve upstream graphics patches)
+        run: python tools/build/horizon_check.py .cache/horizon-upstream
       - name: Rust toolchain
         run: rustup update stable --no-self-update
       - name: Check actual upstream Hooks and Host (not mock interfaces)
         shell: pwsh
         run: |
-          & cargo +stable check --manifest-path horizon/native/api/Cargo.toml 2>&1 | Tee-Object -FilePath native-check.log
+          & cargo +stable check --manifest-path .cache/horizon-upstream/Cargo.toml -p mod-halfcraft-horizon 2>&1 | Tee-Object -FilePath native-check.log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
             $tail = (Get-Content native-check.log -Tail 100) -join "`n"
@@ -74,22 +83,3 @@ jobs:
             exit $code
           }
 
-  previous-native-diagnostic:
-    name: Recover initial native compiler diagnostic
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Expose previous failure without external log downloads
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          gh run view 42492234193 --job 128766907909 --log-failed --allow-escape-sequences > /tmp/previous-native.log
-          python - <<'PYTHON'
-          from pathlib import Path
-          text = Path('/tmp/previous-native.log').read_text()[-18000:]
-          for start in range(0, len(text), 2400):
-              part = text[start:start + 2400].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-              print(f'::notice title=Previous native compiler output::{part}')
-          PYTHON

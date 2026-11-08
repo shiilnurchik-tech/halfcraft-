@@ -17,7 +17,9 @@ normal HalfCraft release ZIP. No `.hnmod` or tested Horizon executable is suppli
   logged in, its action bar. Unavailable/incompatible hosts are reported, not
   silently accepted. Retry is capped at once per second.
 - Portable regression tests using the **same bridge source** as the native mod,
-  plus Windows tests and a pinned upstream API compile check in CI.
+  plus Windows tests and a pinned upstream API compile check in CI. The API
+  check stages the adapter in Horizon's workspace to retain its vendored graphics
+  patches; a standalone `cargo check` of the API crate does not inherit them.
 
 The mapping is opened **read-only**: no client PID/heartbeat, ready flags, ring
 indices or world buffers are changed. Source keeps its ordinary player authority.
