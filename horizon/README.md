@@ -18,7 +18,7 @@ Pinned Horizon source: `11102a56510c0a1b546339ab45e1b141c85e8ebc`.
   WASD/jump/sneak state, release-all, one-shot impulses, push-state tracking, and
   per-channel fragmented UTF-8 strings (64 KiB limit; overflow discarded to END).
 - Actual Horizon movement-input and player-impulse hooks; hints go to the action
-  bar, pickups/captions to chat. Native keyboard movement is retained until Source
+  bar; pickups/captions and command feedback go to the action bar and log. Native keyboard movement is retained until Source
   has supplied a key event. Menu/loading/stale-session guards clear held state.
 - `/halfcraft follow`: the integrated server moves its single spectator player
   to Source's current position/look. This runs on the authoritative server tick,

@@ -12,6 +12,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn notify(host: &mut dyn Host, message: &str) {
+    eprintln!("{message}");
+    host.client_action_bar(Text::literal(message), false);
+}
+
 pub fn hooks() -> Box<dyn Hooks> {
     Box::new(HalfCraft {
         state: Mutex::new(State::default()),
@@ -81,7 +86,7 @@ impl Hooks for HalfCraft {
         let trailing = words.next();
         let message = {
             let Ok(mut state) = self.state.try_lock() else {
-                host.chat("HalfCraft is busy; retry the command.");
+                notify(host, "HalfCraft is busy; retry the command.");
                 return Flow::Cancel;
             };
             match (command,trailing) {
@@ -92,7 +97,7 @@ impl Hooks for HalfCraft {
                             Ok(mapping) => { state.mapping=Some(mapping); state.enabled=true; }
                             Err(error) => {
                                 drop(state);
-                                host.chat(&format!("HalfCraft: cannot connect to Source: {error:?}"));
+                                notify(host, &format!("HalfCraft: cannot connect to Source: {error:?}"));
                                 return Flow::Cancel;
                             }
                         }
@@ -110,7 +115,7 @@ impl Hooks for HalfCraft {
                 _ => "HalfCraft: /halfcraft connect | disconnect | follow | unfollow | status. Use a disposable test world; no full gameplay handshake yet.".to_owned(),
             }
         };
-        host.chat(&message);
+        notify(host, &message);
         Flow::Cancel
     }
     fn tick(&self, host: &mut dyn Host, _event: &mut TickEvent) {
@@ -185,7 +190,7 @@ impl Hooks for HalfCraft {
                 state.status = Some(message.clone());
                 drop(state);
                 if changed {
-                    host.chat(&message);
+                    notify(host, &message);
                 }
                 return;
             }
@@ -219,9 +224,10 @@ impl Hooks for HalfCraft {
         for (channel, text) in strings {
             match u32::from(channel) {
                 STR_HINT => host.client_action_bar(Text::literal(text), false),
-                STR_CAPTION | STR_PICKUP => host.chat(&text),
+                STR_CAPTION | STR_PICKUP => notify(host, &text),
                 // Never turn an untrusted/partial command fragment into a console command.
-                STR_COMMAND => host.chat(
+                STR_COMMAND => notify(
+                    host,
                     "HalfCraft: Source command transport received; execution adapter not enabled.",
                 ),
                 _ => {}
