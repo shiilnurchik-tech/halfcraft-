@@ -26,3 +26,7 @@ minecraft/logs/
 # python
 __pycache__/
 *.pyc
+
+# Horizon native build/test outputs
+horizon/**/target/
+horizon/native/api/Cargo.lock

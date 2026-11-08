@@ -1,0 +1,8 @@
+[package]
+name = "halfcraft-horizon-bridge-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "../native/api/src/bridge/mod.rs"

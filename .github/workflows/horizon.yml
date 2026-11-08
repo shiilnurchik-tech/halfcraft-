@@ -1,0 +1,61 @@
+name: Horizon experimental adapter
+
+on:
+  push:
+    paths:
+      - 'horizon/**'
+      - 'protocol/schema/**'
+      - 'tools/build/horizon_protocol.py'
+      - 'tools/halfcraft/protocol.py'
+      - '.github/workflows/horizon.yml'
+  pull_request:
+    paths:
+      - 'horizon/**'
+      - 'protocol/schema/**'
+      - 'tools/build/horizon_protocol.py'
+      - 'tools/halfcraft/protocol.py'
+      - '.github/workflows/horizon.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    name: Bridge (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Check schema parity
+        run: python tools/build/horizon_protocol.py --check
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update
+      - name: Regression tests (no Horizon or game needed)
+        run: cargo +stable test --locked --manifest-path horizon/bridge-tests/Cargo.toml
+      - name: Rust formatting
+        run: |
+          cargo +stable fmt --manifest-path horizon/bridge-tests/Cargo.toml --check
+          rustfmt +stable --edition 2024 --check horizon/native/api/src/lib.rs
+
+  native-api:
+    name: Pinned Horizon API compile check
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update
+      - name: Check actual upstream Hooks and Host (not mock interfaces)
+        run: cargo +stable check --manifest-path horizon/native/api/Cargo.toml

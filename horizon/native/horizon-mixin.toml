@@ -1,0 +1,9 @@
+[mod]
+id = "halfcraft-horizon"
+version = "0.1.0"
+
+[compatibility]
+horizon_revision = "11102a56510c0a1b546339ab45e1b141c85e8ebc"
+
+[api]
+path = "api"

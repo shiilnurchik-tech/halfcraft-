@@ -192,3 +192,10 @@ World export no longer waits for ring space on Minecraft's render thread; collis
 bounded and obsolete queued regions are deprioritized after teleports. Linked Minecraft defaults to
 5 chunks render distance / 4 simulation (JVM properties can restore 8/8). See
 [changes, caveats and the Kleiner teleport regression checklist](docs/transition-performance.md).
+
+### Horizon / Minecraft Rust Edition
+
+An experimental native Rust adapter is being developed in [`horizon/`](horizon/README.md).
+It currently observes the Source connection only: world rendering, collision and
+Minecraft gameplay integration are **not ported yet**. Keep using the Fabric build
+for playable HalfCraft; a Horizon launcher download alone cannot run its JAR.
